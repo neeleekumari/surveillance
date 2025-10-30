@@ -1,0 +1,39 @@
+{
+    "database": {
+        "host": "localhost",
+        "name": "floor_monitor",
+        "user": "postgres",
+        "password": "your_password_here",
+        "port": 5432
+    },
+    "cameras": [
+        {
+            "id": 0,
+            "name": "Camera 0",
+            "width": 1280,
+            "height": 720,
+            "fps": 60,
+            "rois": []
+        },
+        {
+            "id": 1,
+            "name": "Camera 1",
+            "width": 1280,
+            "height": 720,
+            "fps": 60,
+            "rois": []
+        }
+    ],
+    "thresholds": {
+        "warning_minutes": 15,
+        "alert_minutes": 30
+    },
+    "notifications": {
+        "enabled": true,
+        "sound": true
+    },
+    "app": {
+        "version": "1.0.0",
+        "debug": true
+    }
+}
