@@ -1,39 +1,54 @@
 {
-    "database": {
-        "host": "localhost",
-        "name": "floor_monitor",
-        "user": "postgres",
-        "password": "your_password_here",
-        "port": 5432
+  "database": {
+    "host": "localhost",
+    "name": "floor_monitor",
+    "user": "postgres",
+    "password": "psql",
+    "port": 5432
+  },
+  "cameras": [
+    {
+      "id": 0,
+      "name": "Camera 0",
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "rois": []
     },
-    "cameras": [
-        {
-            "id": 0,
-            "name": "Camera 0",
-            "width": 1280,
-            "height": 720,
-            "fps": 60,
-            "rois": []
-        },
-        {
-            "id": 1,
-            "name": "Camera 1",
-            "width": 1280,
-            "height": 720,
-            "fps": 60,
-            "rois": []
-        }
-    ],
-    "thresholds": {
-        "warning_minutes": 15,
-        "alert_minutes": 30
+    {
+      "id": 1,
+      "name": "Camera 1",
+      "width": 640,
+      "height": 480,
+      "fps": 30,
+      "rois": []
     },
-    "notifications": {
-        "enabled": true,
-        "sound": true
-    },
-    "app": {
-        "version": "1.0.0",
-        "debug": true
+    {
+      "id": 2,
+      "name": "Camera 2",
+      "width": 1024,
+      "height": 768,
+      "fps": 30,
+      "rois": []
     }
+  ],
+  "thresholds": {
+    "warning_minutes": 15,
+    "alert_minutes": 30,
+    "grace_period": 5.0
+  },
+  "notifications": {
+    "enabled": true,
+    "sound": true
+  },
+  "app": {
+    "version": "1.0.0",
+    "debug": true,
+    "face_recognition": {
+      "enable_3d": true,
+      "liveness_required": true,
+  "similarity_threshold": 0.68,
+      "model_name": "ArcFace"
+    }
+  }
 }

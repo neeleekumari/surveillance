@@ -13,20 +13,22 @@ logger = logging.getLogger(__name__)
 class ConfigManager:
     """Manages application configuration loading and validation."""
     
-    def __init__(self, config_path: str = "config/config.json"):
+    def __init__(self, config_path: str = None):
         """Initialize the configuration manager.
         
         Args:
             config_path: Path to the configuration file
         """
+        if config_path is None:
+            # Default to config file in project root
+            config_path = str(Path(__file__).parent.parent / "config" / "config.json")
         self.config_path = Path(config_path)
-        self.config = {}
         self.default_config = {
             "database": {
                 "host": "localhost",
                 "name": "floor_monitor",
                 "user": "postgres",
-                "password": "",
+                "password": "psql",
                 "port": 5432
             },
             "cameras": [
@@ -46,9 +48,16 @@ class ConfigManager:
             },
             "app": {
                 "version": "1.0.0",
-                "debug": True
+                "debug": True,
+                "face_recognition": {
+                    "enable_3d": True,
+                    "liveness_required": True,
+                    "similarity_threshold": 0.50,
+                    "model_name": "ArcFace"
+                }
             }
         }
+        self.config = {}
         
         self.load_config()
         logger.info("ConfigManager initialized")
@@ -222,80 +231,12 @@ class ConfigManager:
         """
         return self.config.get("notifications", self.default_config["notifications"])
 
-
-def test_config_manager():
-    """Test function for the ConfigManager class."""
-    import tempfile
-    import os
-    
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    # Create a temporary config file for testing
-    test_config = {
-        "database": {
-            "host": "test_host",
-            "name": "test_db",
-            "user": "test_user",
-            "password": "test_pass",
-            "port": 5433
-        },
-        "thresholds": {
-            "warning_minutes": 10,
-            "alert_minutes": 20
-        }
-    }
-    
-    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as f:
-        json.dump(test_config, f)
-        temp_config_path = f.name
-    
-    try:
-        # Create config manager
-        config_manager = ConfigManager(temp_config_path)
+    def get_face_recognition_config(self) -> Dict[str, Any]:
+        """Get face recognition configuration (2D/3D, liveness, thresholds).
         
-        print("Testing ConfigManager...")
-        
-        # Test loading config
-        config = config_manager.load_config()
-        print(f"Loaded config: {config}")
-        
-        # Test getting values
-        db_host = config_manager.get("database.host")
-        print(f"Database host: {db_host}")
-        
-        # Test getting with default
-        missing_value = config_manager.get("nonexistent.key", "default_value")
-        print(f"Missing value with default: {missing_value}")
-        
-        # Test setting values
-        config_manager.set("app.new_setting", "test_value")
-        new_setting = config_manager.get("app.new_setting")
-        print(f"New setting: {new_setting}")
-        
-        # Test getting specific configs
-        db_config = config_manager.get_database_config()
-        print(f"Database config: {db_config}")
-        
-        thresholds = config_manager.get_thresholds()
-        print(f"Thresholds: {thresholds}")
-        
-        # Test saving config
-        config_manager.save_config()
-        print("Configuration saved successfully")
-        
-    except Exception as e:
-        print(f"Error during testing: {str(e)}")
-    finally:
-        # Clean up temporary file
-        if os.path.exists(temp_config_path):
-            os.unlink(temp_config_path)
-    
-    print("ConfigManager test completed.")
+        Returns:
+            Face recognition configuration dictionary
+        """
+        return self.config.get("app", {}).get("face_recognition", self.default_config["app"]["face_recognition"])
 
 
-if __name__ == "__main__":
-    test_config_manager()

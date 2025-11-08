@@ -1,263 +1,195 @@
 """
-Presence Tracker Module
-----------------------
-Tracks worker presence over time using detection data.
+Presence Tracker (Stabilized + Real-Time Safe)
+----------------------------------------------
+Tracks worker presence and activity duration over time.
+Handles noisy detections, accumulates total time, and
+triggers warning/alert transitions smoothly.
 """
+
 import time
 import logging
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple, Set, Deque
-from collections import defaultdict, deque
-import numpy as np
+from typing import Dict, List, Optional, Tuple, Deque
+from collections import deque
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class WorkerPresence:
-    """Tracks presence data for a single worker."""
+    """Tracks a worker’s presence session and status."""
     worker_id: int
     name: str
-    last_seen: float = 0.0
     first_detected: float = 0.0
+    last_seen: float = 0.0
     total_presence_time: float = 0.0
-    status: str = "absent"  # 'present', 'absent', 'exceeded'
-    detection_history: Deque[Tuple[float, bool]] = field(default_factory=deque)
-    
-    def update_presence(self, detected: bool, timestamp: float) -> None:
-        """Update presence status based on detection."""
+    status: str = "absent"  # present / absent / exceeded
+    detection_buffer: Deque[float] = field(default_factory=lambda: deque(maxlen=10))
+    absence_start: float = 0.0
+    last_absence_alert_time: float = 0.0
+
+    def update(self, detected: bool, timestamp: float, grace_period: float = 5.0):
+        """Update state based on detection at given timestamp."""
         if detected:
+            self.detection_buffer.append(timestamp)
             if self.status == "absent":
-                # New detection
+                # Start a new session
                 self.first_detected = timestamp
                 self.status = "present"
+                logger.debug(f"[{self.name}] detected → present at {timestamp:.1f}")
             self.last_seen = timestamp
         else:
-            if self.status == "present" and timestamp - self.last_seen > 5.0:  # 5s cooldown
-                # Update total presence time
-                self.total_presence_time += (self.last_seen - self.first_detected)
+            # Not detected; check for sustained absence
+            if self.status == "present" and timestamp - self.last_seen > grace_period:
+                session_time = self.last_seen - self.first_detected
+                if session_time > 0:
+                    self.total_presence_time += session_time
                 self.status = "absent"
+                self.absence_start = timestamp
                 self.first_detected = 0.0
-        
-        # Store detection in history (sliding window)
-        self.detection_history.append((timestamp, detected))
-        if len(self.detection_history) > 100:  # Keep last 100 detections
-            self.detection_history.popleft()
-    
-    def get_current_status(self, current_time: float, warning_threshold: float = 1800, 
-                         alert_threshold: float = 3600) -> Tuple[str, float]:
-        """Get current status and time since detection."""
+                logger.debug(f"[{self.name}] lost → absent ({self.total_presence_time:.1f}s total)")
+
+    def _evaluate_status(self, current_time: float,
+                         warn_th: float, alert_th: float) -> Tuple[str, float]:
+        """Evaluate current state vs thresholds."""
         if self.status == "absent":
             return "absent", 0.0
-        
-        time_present = current_time - self.first_detected
-        
-        if time_present > alert_threshold:
-            self.status = "exceeded"
-        elif time_present > warning_threshold:
-            self.status = "present"  # Could add 'warning' status
-        
-        return self.status, time_present
+
+        session_time = current_time - self.first_detected
+        total_time = self.total_presence_time + session_time
+
+        # Check thresholds
+        if session_time >= alert_th:
+            state = "exceeded"
+        else:
+            state = "present"
+
+        return state, total_time
+
+    def get_status_dict(self, current_time: float,
+                        warn_th: float, alert_th: float) -> Dict:
+        """Return serializable worker status."""
+        state, total_time = self._evaluate_status(current_time, warn_th, alert_th)
+        absence_duration = current_time - self.absence_start if self.status == "absent" and self.absence_start > 0 else 0.0
+        return dict(
+            worker_id=self.worker_id,
+            name=self.name,
+            status=state,
+            session_time=max(0.0, current_time - self.first_detected if self.first_detected else 0.0),
+            total_presence_time=total_time,
+            last_seen=self.last_seen,
+            absence_duration=absence_duration
+        )
 
 
 class PresenceTracker:
-    """Tracks presence of multiple workers using detection data."""
-    
+    """Tracks and maintains worker presence in real time."""
+
     def __init__(self, config: Optional[dict] = None):
-        """Initialize the presence tracker."""
         self.config = config or {}
         self.workers: Dict[int, WorkerPresence] = {}
-        self.detection_zones: Dict[int, Tuple[int, int, int, int]] = {}  # zone_id: (x1, y1, x2, y2)
-        self.last_update = time.time()
-        
-        # Load configuration
-        self.warning_threshold = self.config.get("warning_minutes", 30) * 60  # Convert to seconds
-        self.alert_threshold = self.config.get("alert_minutes", 60) * 60  # Convert to seconds
-        
-        logger.info(f"Initialized PresenceTracker with warning={self.warning_threshold}s, "
-                   f"alert={self.alert_threshold}s")
-    
-    def add_worker(self, worker_id: int, name: str) -> None:
-        """Add a new worker to track."""
+        self.warning_threshold = self.config.get("warning_minutes", 30) * 60
+        self.alert_threshold = self.config.get("alert_minutes", 60) * 60
+        self.grace_period = self.config.get("grace_period", 5.0)
+        logger.info(
+            f"PresenceTracker initialized (warn={self.warning_threshold}s, "
+            f"alert={self.alert_threshold}s, grace={self.grace_period}s)"
+        )
+
+    # --------------------------------------------------------------
+    def add_worker(self, worker_id: int, name: str):
         if worker_id not in self.workers:
-            self.workers[worker_id] = WorkerPresence(worker_id=worker_id, name=name)
-            logger.info(f"Added worker: {name} (ID: {worker_id})")
-    
-    def remove_worker(self, worker_id: int) -> None:
-        """Remove a worker from tracking."""
+            self.workers[worker_id] = WorkerPresence(worker_id, name)
+            logger.debug(f"Added worker {name} ({worker_id})")
+
+    def remove_worker(self, worker_id: int):
         if worker_id in self.workers:
-            name = self.workers[worker_id].name
             del self.workers[worker_id]
-            logger.info(f"Removed worker: {name} (ID: {worker_id})")
-    
+            logger.debug(f"Removed worker {worker_id}")
+
+    # --------------------------------------------------------------
     def update_detections(self, detections: List[dict]) -> Dict[int, dict]:
-        """Update worker presence based on new detections.
-        
-        Args:
-            detections: List of detection dictionaries with 'worker_id' and 'confidence'
-            
-        Returns:
-            Dictionary of worker_id to status updates
-        """
-        current_time = time.time()
+        """Process a list of YOLO/face recognition detections."""
+        now = time.time()
         updates = {}
-        detected_workers = set()
-        
-        # Process detections
-        for det in detections:
-            worker_id = det.get('worker_id')
-            if worker_id is None:
-                continue
-                
-            if worker_id not in self.workers:
-                self.add_worker(worker_id, f"Worker {worker_id}")
-            
-            # Update presence for detected workers
-            self.workers[worker_id].update_presence(True, current_time)
-            detected_workers.add(worker_id)
-        
-        # Update status for all workers
-        for worker_id, worker in self.workers.items():
-            if worker_id not in detected_workers:
-                worker.update_presence(False, current_time)
-            
-            # Get current status
-            status, time_present = worker.get_current_status(
-                current_time, 
-                self.warning_threshold,
-                self.alert_threshold
-            )
-            
-            # Prepare update
-            updates[worker_id] = {
-                'status': status,
-                'time_present': time_present,
-                'last_seen': worker.last_seen,
-                'name': worker.name
-            }
-            
-            # Log status changes
-            if status != worker.status:
-                logger.info(f"Worker {worker.name} ({worker_id}): {worker.status} -> {status} "
-                          f"({time_present:.1f}s)")
-                worker.status = status
-        
-        self.last_update = current_time
+
+        # Track which workers were detected this frame
+        detected = set(det["worker_id"] for det in detections if "worker_id" in det and det["worker_id"] is not None)
+
+        # Ensure workers exist
+        for wid in detected:
+            if wid not in self.workers:
+                self.add_worker(wid, f"Worker {wid}")
+
+        # Update presence state for all
+        for wid, worker in list(self.workers.items()):
+            worker.update(wid in detected, now, grace_period=self.grace_period)
+            state_dict = worker.get_status_dict(now, self.warning_threshold, self.alert_threshold)
+            updates[wid] = state_dict
+
+            # Handle status transitions
+            prev_state = worker.status
+            if state_dict["status"] != prev_state:
+                logger.info(
+                    f"[{worker.name}] {prev_state} → {state_dict['status']} "
+                    f"({state_dict['session_time']:.1f}s active)"
+                )
+                worker.status = state_dict["status"]
+
         return updates
-    
-    def get_worker_status(self, worker_id: int) -> Optional[dict]:
-        """Get current status of a worker."""
+
+    # --------------------------------------------------------------
+    def get_worker_status(self, worker_id: int) -> Optional[Dict]:
         if worker_id not in self.workers:
             return None
-            
+        now = time.time()
         worker = self.workers[worker_id]
-        status, time_present = worker.get_current_status(
-            time.time(),
-            self.warning_threshold,
-            self.alert_threshold
-        )
-        
-        return {
-            'worker_id': worker_id,
-            'name': worker.name,
-            'status': status,
-            'time_present': time_present,
-            'last_seen': worker.last_seen,
-            'total_presence_time': worker.total_presence_time
-        }
-    
-    def get_all_statuses(self) -> List[dict]:
-        """Get status for all workers."""
-        current_time = time.time()
-        statuses = []
-        
-        for worker_id, worker in self.workers.items():
-            status, time_present = worker.get_current_status(
-                current_time,
-                self.warning_threshold,
-                self.alert_threshold
-            )
-            
-            statuses.append({
-                'worker_id': worker_id,
-                'name': worker.name,
-                'status': status,
-                'time_present': time_present,
-                'last_seen': worker.last_seen,
-                'total_presence_time': worker.total_presence_time
-            })
-        
-        return statuses
-    
+        return worker.get_status_dict(now, self.warning_threshold, self.alert_threshold)
+
+    def get_all_statuses(self) -> List[Dict]:
+        now = time.time()
+        return [w.get_status_dict(now, self.warning_threshold, self.alert_threshold)
+                for w in self.workers.values()]
+
     def reset_worker(self, worker_id: int) -> bool:
-        """Reset tracking for a worker."""
         if worker_id in self.workers:
-            self.workers[worker_id].total_presence_time = 0.0
-            self.workers[worker_id].first_detected = 0.0
-            self.workers[worker_id].status = "absent"
-            logger.info(f"Reset worker {worker_id}")
+            w = self.workers[worker_id]
+            w.first_detected = w.last_seen = 0.0
+            w.total_presence_time = 0.0
+            w.status = "absent"
+            logger.info(f"Worker {w.name} ({worker_id}) reset.")
             return True
         return False
 
 
+# --------------------------------------------------------------
+# Test / Debug
+# --------------------------------------------------------------
 def test_presence_tracker():
-    """Test function for the PresenceTracker class."""
     import random
-    import time
-    
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    # Create tracker with 1 minute warning, 2 minute alert
-    tracker = PresenceTracker({
-        "warning_minutes": 0.05,  # 3 seconds for testing
-        "alert_minutes": 0.1      # 6 seconds for testing
-    })
-    
-    # Add some test workers
-    test_workers = [
-        (1, "Alice"),
-        (2, "Bob"),
-        (3, "Charlie")
-    ]
-    
-    for worker_id, name in test_workers:
-        tracker.add_worker(worker_id, name)
-    
-    print("Testing presence tracking. Press Ctrl+C to stop.")
-    print("Workers will be detected randomly.")
-    print("Alert threshold: 6s, Warning threshold: 3s")
-    
+
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+    tracker = PresenceTracker({"warning_minutes": 0.05, "alert_minutes": 0.1, "grace_period": 2})
+
+    # Simulated workers
+    worker_ids = [1, 2, 3]
+    for wid in worker_ids:
+        tracker.add_worker(wid, f"Worker {wid}")
+
+    print("Running presence tracker test (Ctrl+C to stop)...")
     try:
-        for i in range(30):  # Run for 30 seconds
-            # Simulate random detections
+        for i in range(30):
             detections = []
-            for worker_id, _ in test_workers:
-                if random.random() > 0.7:  # 30% chance of detection
-                    detections.append({"worker_id": worker_id, "confidence": 0.9})
-            
-            # Update tracker
+            for wid in worker_ids:
+                if random.random() > 0.6:
+                    detections.append({"worker_id": wid})
             updates = tracker.update_detections(detections)
-            
-            # Print current status
-            print(f"\n--- Update {i+1} ---")
-            for worker_id, status in updates.items():
-                print(f"{status['name']} ({worker_id}): {status['status']} "
-                      f"({status['time_present']:.1f}s)")
-            
-            time.sleep(1)  # Simulate 1 second between updates
-            
+            for wid, info in updates.items():
+                print(f"{info['name']}: {info['status']}, total={info['total_presence_time']:.1f}s")
+            time.sleep(1)
     except KeyboardInterrupt:
-        print("\nTest stopped by user")
-    
-    # Print final status
-    print("\n--- Final Status ---")
-    for status in tracker.get_all_statuses():
-        print(f"{status['name']} ({status['worker_id']}): {status['status']} "
-              f"(Total: {status['total_presence_time']:.1f}s)")
+        print("Stopped.")
 
-
-if __name__ == "__main__":
-    test_presence_tracker()
+    print("\nFinal:")
+    for s in tracker.get_all_statuses():
+        print(s)

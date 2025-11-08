@@ -1,17 +1,20 @@
 """
-Alert Manager Module
-------------------
-Handles desktop notifications, sound alerts, and visual indicators for the floor monitoring system.
+Alert Manager (Enhanced + Thread-Safe)
+-------------------------------------
+Handles cross-platform notifications, alert sounds, and UI callbacks.
+Designed for integration with the real-time 3D worker monitoring suite.
 """
+
 import logging
 import threading
 import time
 import os
-from typing import Dict, List, Optional
-from dataclasses import dataclass
+import platform
+from typing import Dict, List, Optional, Callable
+from dataclasses import dataclass, field
 from datetime import datetime
 
-# Try to import win10toast for Windows notifications
+# Optional dependencies
 try:
     from win10toast import ToastNotifier
     TOAST_AVAILABLE = True
@@ -19,7 +22,6 @@ except ImportError:
     TOAST_AVAILABLE = False
     ToastNotifier = None
 
-# Try to import playsound for sound alerts
 try:
     from playsound import playsound
     PLAYSOUND_AVAILABLE = True
@@ -29,9 +31,10 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+
 @dataclass
 class Alert:
-    """Represents an alert to be displayed to the user."""
+    """Data model for an active or archived alert."""
     alert_id: str
     title: str
     message: str
@@ -40,42 +43,52 @@ class Alert:
     acknowledged: bool = False
     worker_id: Optional[int] = None
     duration: Optional[int] = None
+    expires_after: float = 300.0  # auto-expire after 5 minute
+
 
 class AlertManager:
-    """Manages alerts and notifications for the floor monitoring system."""
-    
-    def __init__(self, config: Optional[dict] = None):
-        """Initialize the alert manager."""
+    """Manages alerts and notifications in real time."""
+
+    def __init__(self, config: Optional[dict] = None, ui_callback: Optional[Callable[[str, str, str], None]] = None):
+        """
+        Args:
+            config: Configuration dictionary for alert settings.
+            ui_callback: Optional function to send alert logs to UI.
+        """
         self.config = config or {}
         self.alerts: List[Alert] = []
         self.alert_history: List[Alert] = []
-        self.max_history = 1000
+        self.max_history = 500
         self.running = True
-        
-        # Initialize toast notifier if available
-        self.toaster = ToastNotifier() if TOAST_AVAILABLE and ToastNotifier is not None else None
-        
-        # Alert configuration
-        self.notifications_enabled = self.config.get("notifications", {}).get("enabled", True)
-        self.sound_enabled = self.config.get("notifications", {}).get("sound", True)
-        
-        logger.info(f"Initialized AlertManager (notifications: {self.notifications_enabled}, "
-                   f"sound: {self.sound_enabled})")
-    
-    def add_alert(self, title: str, message: str, alert_type: str = "info", 
+        self.ui_callback = ui_callback
+        self._lock = threading.Lock()
+        self._last_sound_time: Dict[str, float] = {}
+
+        # Notification options
+        notify_cfg = self.config.get("notifications", {})
+        self.notifications_enabled = notify_cfg.get("enabled", True)
+        self.sound_enabled = notify_cfg.get("sound", True)
+        self.sound_cooldown = notify_cfg.get("sound_cooldown", 5.0)
+
+        # Initialize notifier
+        if TOAST_AVAILABLE and platform.system() == "Windows":
+            try:
+                self.toaster = ToastNotifier()
+            except Exception:
+                self.toaster = None
+        else:
+            self.toaster = None
+
+        logger.info(f"AlertManager initialized (notifications={self.notifications_enabled}, sound={self.sound_enabled})")
+
+        # Start background cleanup thread
+        self._cleanup_thread = threading.Thread(target=self._cleanup_loop, daemon=True)
+        self._cleanup_thread.start()
+
+    # --------------------------------------------------------------
+    def add_alert(self, title: str, message: str, alert_type: str = "info",
                   worker_id: Optional[int] = None, duration: Optional[int] = None) -> str:
-        """Add a new alert to be displayed.
-        
-        Args:
-            title: Alert title
-            message: Alert message
-            alert_type: Type of alert ('warning', 'alert', 'info')
-            worker_id: Associated worker ID (optional)
-            duration: Duration in seconds (optional)
-            
-        Returns:
-            Alert ID
-        """
+        """Register a new alert."""
         alert_id = f"{int(time.time() * 1000)}"
         alert = Alert(
             alert_id=alert_id,
@@ -86,182 +99,146 @@ class AlertManager:
             worker_id=worker_id,
             duration=duration
         )
-        
-        self.alerts.append(alert)
-        logger.info(f"New {alert_type} alert: {title} - {message}")
-        
-        # Show notification if enabled
+
+        with self._lock:
+            self.alerts.append(alert)
+            if len(self.alerts) > 100:
+                # Prevent unbounded growth
+                oldest = self.alerts.pop(0)
+                self.alert_history.append(oldest)
+
+        logger.info(f"[{alert_type.upper()}] {title}: {message}")
+
+        # Send to UI if available
+        if self.ui_callback:
+            color_map = {"alert": "red", "warning": "orange", "info": "blue"}
+            self.ui_callback(f"{title}: {message}", color_map.get(alert_type, "black"), alert_type)
+
+        # Show notification
         if self.notifications_enabled:
-            self._show_notification(alert)
-        
-        # Play sound if enabled
+            threading.Thread(target=self._show_notification, args=(alert,), daemon=True).start()
+
+        # Play sound
         if self.sound_enabled:
-            self._play_alert_sound(alert_type)
-        
+            threading.Thread(target=self._play_alert_sound, args=(alert_type,), daemon=True).start()
+
         return alert_id
-    
-    def _show_notification(self, alert: Alert) -> None:
-        """Show a desktop notification for the alert."""
+
+    # --------------------------------------------------------------
+    def _show_notification(self, alert: Alert):
+        """Display desktop notification (Windows only)."""
         if not self.toaster:
             return
-            
         try:
-            # Duration in milliseconds (0 = system default)
-            duration_ms = alert.duration * 1000 if alert.duration else 0
-            
-            # Show toast notification
             self.toaster.show_toast(
                 alert.title,
                 alert.message,
-                duration=duration_ms,
+                duration=alert.duration or 5,
                 threaded=True
             )
         except Exception as e:
-            logger.error(f"Failed to show notification: {str(e)}")
-    
-    def _play_alert_sound(self, alert_type: str) -> None:
-        """Play an alert sound based on the alert type."""
+            logger.debug(f"Toast notification failed: {e}")
+
+    # --------------------------------------------------------------
+    def _play_alert_sound(self, alert_type: str):
+        """Play non-blocking alert sound (rate-limited)."""
         if not PLAYSOUND_AVAILABLE or not playsound:
             return
-            
+
+        now = time.time()
+        last_time = self._last_sound_time.get(alert_type, 0)
+        if now - last_time < self.sound_cooldown:
+            return
+        self._last_sound_time[alert_type] = now
+
         try:
-            # Define sound paths based on alert type
-            sound_path = None
-            if alert_type == "alert":
-                sound_path = "assets/sounds/alert.wav"
-            elif alert_type == "warning":
-                sound_path = "assets/sounds/warning.wav"
-            elif alert_type == "info":
-                sound_path = "assets/sounds/info.wav"
+            # Try multiple sound file locations and formats
+            sound_candidates = [
+                "assets/Beep.mpeg",  # User's existing beep file
+            ]
             
-            # Play sound if path exists
-            if sound_path and os.path.exists(sound_path):
-                playsound(sound_path)
-            elif sound_path:
-                logger.warning(f"Sound file not found: {sound_path}")
+            # Use the first available sound file
+            path = None
+            for candidate in sound_candidates:
+                if os.path.exists(candidate):
+                    path = candidate
+                    break
+            
+            if path:
+                logger.info(f"Playing alert sound: {path}")
+                # Use blocking playback in daemon thread to avoid Windows WPARAM errors
+                def play_blocking():
+                    try:
+                        playsound(path, block=True)
+                    except Exception as e:
+                        logger.debug(f"Playsound error: {e}")
+                threading.Thread(target=play_blocking, daemon=True).start()
             else:
-                # Default sound if no specific sound is defined
-                logger.info(f"No specific sound for {alert_type}, playing default")
+                # Minimal fallback beep
+                logger.debug("No sound file found, using system beep")
+                if platform.system() == "Windows":
+                    import winsound
+                    winsound.MessageBeep()
         except Exception as e:
-            logger.error(f"Failed to play sound: {str(e)}")
-    
+            logger.warning(f"Sound playback failed: {e}")
+
+    # --------------------------------------------------------------
     def acknowledge_alert(self, alert_id: str) -> bool:
-        """Acknowledge an alert by ID."""
-        for i, alert in enumerate(self.alerts):
-            if alert.alert_id == alert_id:
-                alert.acknowledged = True
-                # Move to history
-                self.alert_history.append(self.alerts.pop(i))
-                # Keep history within limits
-                if len(self.alert_history) > self.max_history:
-                    self.alert_history.pop(0)
-                logger.info(f"Alert {alert_id} acknowledged")
-                return True
+        """Mark an alert as acknowledged."""
+        with self._lock:
+            for i, alert in enumerate(self.alerts):
+                if alert.alert_id == alert_id:
+                    alert.acknowledged = True
+                    self.alert_history.append(self.alerts.pop(i))
+                    self._trim_history()
+                    logger.info(f"Acknowledged alert {alert_id}")
+                    return True
         return False
-    
-    def get_active_alerts(self) -> List[Alert]:
-        """Get all unacknowledged alerts."""
-        return [alert for alert in self.alerts if not alert.acknowledged]
-    
-    def get_alert_history(self, limit: int = 50) -> List[Alert]:
-        """Get recent alert history."""
-        return self.alert_history[-limit:] if self.alert_history else []
-    
-    def clear_alerts(self) -> int:
-        """Clear all current alerts and return count."""
-        count = len(self.alerts)
-        # Move all alerts to history
-        self.alert_history.extend(self.alerts)
-        # Keep history within limits
+
+    def _trim_history(self):
+        """Keep alert history within limit."""
         if len(self.alert_history) > self.max_history:
             self.alert_history = self.alert_history[-self.max_history:]
-        self.alerts.clear()
-        logger.info(f"Cleared {count} alerts")
+
+    # --------------------------------------------------------------
+    def get_active_alerts(self) -> List[Alert]:
+        with self._lock:
+            return [a for a in self.alerts if not a.acknowledged]
+
+    def get_alert_history(self, limit: int = 50) -> List[Alert]:
+        with self._lock:
+            return self.alert_history[-limit:]
+
+    def clear_alerts(self) -> int:
+        """Clear all active alerts."""
+        with self._lock:
+            count = len(self.alerts)
+            self.alert_history.extend(self.alerts)
+            self.alerts.clear()
+            self._trim_history()
+        logger.info(f"Cleared {count} active alerts.")
         return count
-    
-    def stop(self) -> None:
-        """Stop the alert manager."""
+
+    # --------------------------------------------------------------
+    def _cleanup_loop(self):
+        """Background thread to auto-expire old alerts."""
+        while self.running:
+            try:
+                now = time.time()
+                with self._lock:
+                    expired = [a for a in self.alerts if now - a.timestamp > a.expires_after]
+                    for a in expired:
+                        logger.debug(f"Auto-archiving alert {a.alert_id}")
+                        self.alerts.remove(a)
+                        self.alert_history.append(a)
+                        self._trim_history()
+                time.sleep(5)
+            except Exception as e:
+                logger.debug(f"Alert cleanup loop error: {e}")
+                time.sleep(5)
+
+    # --------------------------------------------------------------
+    def stop(self):
+        """Stop manager and cleanup thread."""
         self.running = False
-        logger.info("AlertManager stopped")
-
-
-def test_alert_manager():
-    """Test function for the AlertManager class."""
-    import time
-    
-    # Configure logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    # Create alert manager
-    config = {
-        "notifications": {
-            "enabled": True,
-            "sound": True
-        }
-    }
-    
-    alert_manager = AlertManager(config)
-    
-    print("Testing AlertManager. Press Ctrl+C to stop.")
-    
-    try:
-        # Add some test alerts
-        alert_manager.add_alert(
-            "Worker Alert",
-            "Worker John Doe has been present for over 30 minutes",
-            "alert",
-            worker_id=1,
-            duration=30
-        )
-        
-        alert_manager.add_alert(
-            "Worker Warning",
-            "Worker Jane Smith has been present for over 15 minutes",
-            "warning",
-            worker_id=2,
-            duration=15
-        )
-        
-        alert_manager.add_alert(
-            "System Info",
-            "Application started successfully",
-            "info"
-        )
-        
-        # Show active alerts
-        print("\nActive Alerts:")
-        for alert in alert_manager.get_active_alerts():
-            print(f"  {alert.title}: {alert.message} ({alert.alert_type})")
-        
-        # Wait a bit to see notifications
-        time.sleep(5)
-        
-        # Acknowledge first alert
-        active_alerts = alert_manager.get_active_alerts()
-        if active_alerts:
-            alert_id = active_alerts[0].alert_id
-            alert_manager.acknowledge_alert(alert_id)
-            print(f"\nAcknowledged alert {alert_id}")
-        
-        # Show remaining alerts
-        print("\nRemaining Active Alerts:")
-        for alert in alert_manager.get_active_alerts():
-            print(f"  {alert.title}: {alert.message} ({alert.alert_type})")
-        
-        # Show alert history
-        print("\nAlert History:")
-        for alert in alert_manager.get_alert_history():
-            status = "ACK" if alert.acknowledged else "NEW"
-            print(f"  [{status}] {alert.title}: {alert.message}")
-            
-    except KeyboardInterrupt:
-        print("\nTest stopped by user")
-    finally:
-        alert_manager.stop()
-
-
-if __name__ == "__main__":
-    test_alert_manager()
+        logger.info("AlertManager stopped.")
