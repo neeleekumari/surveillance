@@ -13,9 +13,10 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, QH
                              QLabel, QPushButton, QTableWidget, QTableWidgetItem,
                              QGroupBox, QStatusBar, QToolBar, QAction, QTabWidget,
                              QTextEdit, QProgressBar, QComboBox, QCheckBox, QSpinBox,
-                             QDoubleSpinBox, QFormLayout, QDialog, QListWidget, QLineEdit)
-from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize
-from PyQt5.QtGui import QImage, QPixmap, QIcon, QFont, QColor
+                             QDoubleSpinBox, QFormLayout, QDialog, QListWidget, QListWidgetItem, QLineEdit,
+                             QHeaderView, QFrame, QScrollArea, QGridLayout, QSizePolicy)
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal, QSize, QPropertyAnimation, QEasingCurve, QRect
+from PyQt5.QtGui import QImage, QPixmap, QIcon, QFont, QColor, QPalette, QLinearGradient, QPainter, QBrush
 import time
 
 logger = logging.getLogger(__name__)
@@ -29,31 +30,65 @@ class CameraWidget(QWidget):
         self.init_ui()
         
     def init_ui(self):
-        """Initialize the camera widget UI."""
+        """Initialize the camera widget UI with modern styling."""
         layout = QVBoxLayout()
+        layout.setSpacing(10)
+        layout.setContentsMargins(10, 10, 10, 10)
         
-        # Camera label
-        self.label = QLabel(f"Camera {self.camera_id}")
+        # Camera label with gradient background
+        self.label = QLabel(f"📹 Camera {self.camera_id}")
         self.label.setAlignment(Qt.AlignCenter)  # type: ignore
         font = QFont()
-        font.setPointSize(12)
+        font.setPointSize(14)
         font.setBold(True)
         self.label.setFont(font)
+        self.label.setStyleSheet("""
+            QLabel {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                    stop:0 #2196F3, stop:1 #1976D2);
+                color: white;
+                padding: 12px;
+                border-radius: 8px;
+                font-weight: bold;
+            }
+        """)
         
-        # Video display
+        # Video display with border and shadow effect
         self.video_display = QLabel()
         self.video_display.setAlignment(Qt.AlignCenter)  # type: ignore
         self.video_display.setMinimumSize(640, 480)
-        self.video_display.setStyleSheet("background-color: black;")
+        self.video_display.setStyleSheet("""
+            QLabel {
+                background-color: #1a1a1a;
+                border: 3px solid #2196F3;
+                border-radius: 10px;
+            }
+        """)
         
-        # Status bar
-        self.status_label = QLabel("Status: Disconnected")
+        # Status bar with modern styling
+        self.status_label = QLabel("⚫ Status: Disconnected")
         self.status_label.setAlignment(Qt.AlignCenter)  # type: ignore
+        self.status_label.setStyleSheet("""
+            QLabel {
+                background-color: #f5f5f5;
+                padding: 8px;
+                border-radius: 5px;
+                font-size: 12px;
+            }
+        """)
         
         layout.addWidget(self.label)
         layout.addWidget(self.video_display)
         layout.addWidget(self.status_label)
         self.setLayout(layout)
+        
+        # Set widget background
+        self.setStyleSheet("""
+            QWidget {
+                background-color: white;
+                border-radius: 10px;
+            }
+        """)
     
     def update_frame(self, frame: np.ndarray):
         """Update the video display with a new frame."""
@@ -85,68 +120,360 @@ class CameraWidget(QWidget):
             logger.error(f"Error updating frame for camera {self.camera_id}: {str(e)}")
     
     def set_status(self, status: str, color: str = "black"):
-        """Update the status label."""
-        self.status_label.setText(f"Status: {status}")
+        """Update the status label with modern styling and icons."""
+        icon = "⚫"
+        bg_color = "#f5f5f5"
+        text_color = "black"
+        
         if color == "red":
-            self.status_label.setStyleSheet("color: red; font-weight: bold;")
+            icon = "🔴"
+            bg_color = "#ffebee"
+            text_color = "#c62828"
         elif color == "green":
-            self.status_label.setStyleSheet("color: green; font-weight: bold;")
-        else:
-            self.status_label.setStyleSheet("color: black;")
+            icon = "🟢"
+            bg_color = "#e8f5e9"
+            text_color = "#2e7d32"
+        elif color == "orange":
+            icon = "🟠"
+            bg_color = "#fff3e0"
+            text_color = "#ef6c00"
+        
+        self.status_label.setText(f"{icon} Status: {status}")
+        self.status_label.setStyleSheet(f"""
+            QLabel {{
+                background-color: {bg_color};
+                color: {text_color};
+                padding: 8px;
+                border-radius: 5px;
+                font-size: 12px;
+                font-weight: bold;
+            }}
+        """)
 
 
 class WorkerStatusWidget(QWidget):
     """Widget for displaying worker status information."""
+    
+    # Signals for worker management
+    add_worker_signal = pyqtSignal()
+    delete_workers_signal = pyqtSignal(list)  # List of (worker_id, worker_name) tuples
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.init_ui()
         
     def init_ui(self):
-        """Initialize the worker status widget UI."""
+        """Initialize the worker status widget UI with modern design."""
         layout = QVBoxLayout()
+        layout.setSpacing(15)
+        layout.setContentsMargins(15, 15, 15, 15)
         
-        # Title
-        title = QLabel("Worker Status")
+        # Title with icon
+        title = QLabel("👥 Worker Status Dashboard")
         font = QFont()
-        font.setPointSize(12)
+        font.setPointSize(16)
         font.setBold(True)
         title.setFont(font)
         title.setAlignment(Qt.AlignCenter)  # type: ignore
+        title.setStyleSheet("""
+            QLabel {
+                color: #1976D2;
+                padding: 10px;
+                background-color: #E3F2FD;
+                border-radius: 8px;
+            }
+        """)
         
-        # Worker table
+        # Statistics cards row
+        stats_layout = QHBoxLayout()
+        stats_layout.setSpacing(10)
+        
+        self.total_workers_card = self._create_stat_card("👤 Total", "0", "#2196F3")
+        self.present_workers_card = self._create_stat_card("✅ Present", "0", "#4CAF50")
+        self.absent_workers_card = self._create_stat_card("❌ Absent", "0", "#f44336")
+        self.exceeded_workers_card = self._create_stat_card("⚠️ Exceeded", "0", "#FF9800")
+        
+        stats_layout.addWidget(self.total_workers_card)
+        stats_layout.addWidget(self.present_workers_card)
+        stats_layout.addWidget(self.absent_workers_card)
+        stats_layout.addWidget(self.exceeded_workers_card)
+        
+        # Search and filter bar
+        search_layout = QHBoxLayout()
+        search_layout.setSpacing(10)
+        
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText("🔍 Search by name or ID...")
+        self.search_input.textChanged.connect(self.filter_workers)
+        self.search_input.setStyleSheet("""
+            QLineEdit {
+                padding: 10px;
+                border: 2px solid #2196F3;
+                border-radius: 5px;
+                font-size: 13px;
+                background-color: white;
+            }
+            QLineEdit:focus {
+                border: 2px solid #1976D2;
+            }
+        """)
+        
+        self.status_filter = QComboBox()
+        self.status_filter.addItems(["All Status", "Present", "Absent", "Exceeded"])
+        self.status_filter.currentTextChanged.connect(self.filter_workers)
+        self.status_filter.setStyleSheet("""
+            QComboBox {
+                padding: 10px;
+                border: 2px solid #2196F3;
+                border-radius: 5px;
+                font-size: 13px;
+                background-color: white;
+                min-width: 150px;
+            }
+        """)
+        
+        search_layout.addWidget(self.search_input, 3)
+        search_layout.addWidget(self.status_filter, 1)
+        
+        # Add Worker button
+        add_button_layout = QHBoxLayout()
+        self.add_worker_button = QPushButton("➕ Add New Worker")
+        self.add_worker_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 20px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #388E3C;
+            }
+            QPushButton:pressed {
+                background-color: #2E7D32;
+            }
+        """)
+        self.add_worker_button.clicked.connect(lambda: self.add_worker_signal.emit())
+        add_button_layout.addStretch()
+        add_button_layout.addWidget(self.add_worker_button)
+        
+        # Worker table with modern styling
         self.worker_table = QTableWidget()
-        self.worker_table.setColumnCount(5)
+        self.worker_table.setColumnCount(6)  # Removed Actions column
         self.worker_table.setHorizontalHeaderLabels([
-            "Worker ID", "Name", "Status", "Time Present", "Last Seen"
+            "🆔 ID", "👤 Name", "🟢 Status", "⏱️ Present", "⏰ Absent", "📅 Last Seen"
         ])
         self.worker_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.worker_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.worker_table.setSelectionMode(QTableWidget.MultiSelection)  # Enable multi-select
+        self.worker_table.setAlternatingRowColors(True)
+        self.worker_table.verticalHeader().setVisible(False)
+        
+        # Style the table
+        self.worker_table.setStyleSheet("""
+            QTableWidget {
+                background-color: white;
+                border: 2px solid #e0e0e0;
+                border-radius: 8px;
+                gridline-color: #f0f0f0;
+                font-size: 13px;
+            }
+            QTableWidget::item {
+                padding: 8px;
+            }
+            QTableWidget::item:selected {
+                background-color: #BBDEFB;
+                color: black;
+            }
+            QHeaderView::section {
+                background-color: #2196F3;
+                color: white;
+                padding: 10px;
+                border: none;
+                font-weight: bold;
+                font-size: 13px;
+            }
+            QTableWidget::item:alternate {
+                background-color: #f9f9f9;
+            }
+        """)
+        
+        # Configure header
         header = self.worker_table.horizontalHeader()
         if header:
             header.setStretchLastSection(True)
+            header.setSectionResizeMode(QHeaderView.Interactive)
+        
+        # Store original data for filtering
+        self.all_workers_data = []
+        
+        # Bottom action bar with selection info and delete button
+        bottom_action_layout = QHBoxLayout()
+        bottom_action_layout.setSpacing(10)
+        
+        self.selection_label = QLabel("📋 Selected: 0 workers")
+        self.selection_label.setStyleSheet("""
+            QLabel {
+                font-size: 13px;
+                color: #666;
+                padding: 8px;
+                background-color: #f5f5f5;
+                border-radius: 5px;
+            }
+        """)
+        
+        self.delete_selected_button = QPushButton("🗑️ Delete Selected Workers")
+        self.delete_selected_button.setEnabled(False)
+        self.delete_selected_button.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 20px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QPushButton:hover:enabled {
+                background-color: #d32f2f;
+            }
+            QPushButton:pressed {
+                background-color: #c62828;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+                color: #666666;
+            }
+        """)
+        self.delete_selected_button.clicked.connect(self.delete_selected_workers)
+        
+        bottom_action_layout.addWidget(self.selection_label)
+        bottom_action_layout.addStretch()
+        bottom_action_layout.addWidget(self.delete_selected_button)
+        
+        # Connect selection changed signal
+        self.worker_table.itemSelectionChanged.connect(self.update_selection_label)
         
         layout.addWidget(title)
+        layout.addLayout(stats_layout)
+        layout.addLayout(search_layout)
+        layout.addLayout(add_button_layout)
         layout.addWidget(self.worker_table)
+        layout.addLayout(bottom_action_layout)
         self.setLayout(layout)
+        
+        # Set widget background
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #fafafa;
+            }
+        """)
+    
+    def _create_stat_card(self, title: str, value: str, color: str) -> QFrame:
+        """Create a statistics card widget."""
+        card = QFrame()
+        card.setFrameShape(QFrame.StyledPanel)
+        card.setStyleSheet(f"""
+            QFrame {{
+                background-color: white;
+                border-left: 5px solid {color};
+                border-radius: 8px;
+                padding: 10px;
+            }}
+        """)
+        
+        card_layout = QVBoxLayout()
+        card_layout.setSpacing(5)
+        
+        title_label = QLabel(title)
+        title_label.setStyleSheet("font-size: 12px; color: #666; font-weight: bold;")
+        
+        value_label = QLabel(value)
+        value_label.setStyleSheet(f"font-size: 24px; color: {color}; font-weight: bold;")
+        value_label.setAlignment(Qt.AlignCenter)  # type: ignore
+        
+        card_layout.addWidget(title_label)
+        card_layout.addWidget(value_label)
+        card.setLayout(card_layout)
+        
+        # Store value label for updates
+        card.value_label = value_label
+        
+        return card
+    
+    def filter_workers(self):
+        """Filter workers based on search and status filter."""
+        search_text = self.search_input.text().lower()
+        status_filter = self.status_filter.currentText()
+        
+        # Filter the stored data
+        filtered_workers = []
+        for worker in self.all_workers_data:
+            # Check search text
+            name_match = search_text in worker.get('name', '').lower()
+            id_match = search_text in str(worker.get('worker_id', ''))
+            
+            if not (name_match or id_match or not search_text):
+                continue
+            
+            # Check status filter
+            if status_filter != "All Status":
+                if worker.get('status', '').lower() != status_filter.lower():
+                    continue
+            
+            filtered_workers.append(worker)
+        
+        # Update table with filtered data
+        self._populate_table(filtered_workers)
     
     def update_workers(self, workers: List[Dict]):
         """Update the worker table with new data."""
+        logger.debug(f"update_workers called with {len(workers)} workers")
+        if not workers:
+            logger.warning("update_workers received empty list - table will be empty")
+        
+        # Store data for filtering
+        self.all_workers_data = workers
+        
+        # Update statistics cards
+        total = len(workers)
+        present = sum(1 for w in workers if w.get('status') == 'present')
+        absent = sum(1 for w in workers if w.get('status') == 'absent')
+        exceeded = sum(1 for w in workers if w.get('status') == 'exceeded')
+        
+        self.total_workers_card.value_label.setText(str(total))
+        self.present_workers_card.value_label.setText(str(present))
+        self.absent_workers_card.value_label.setText(str(absent))
+        self.exceeded_workers_card.value_label.setText(str(exceeded))
+        
+        # Apply current filters
+        self.filter_workers()
+    
+    def _populate_table(self, workers: List[Dict]):
+        """Populate the table with worker data."""
         self.worker_table.setRowCount(len(workers))
         
+        # Track absent workers for special highlighting
+        absent_workers = []
+        
         for row, worker in enumerate(workers):
+            worker_id = worker.get('worker_id', '')
+            name = worker.get('name', '')
+            status = worker.get('status', 'unknown')
+            
             # Worker ID
-            item = QTableWidgetItem(str(worker.get('worker_id', '')))
+            item = QTableWidgetItem(str(worker_id))
             item.setTextAlignment(Qt.AlignCenter)  # type: ignore
             self.worker_table.setItem(row, 0, item)
             
             # Name
-            item = QTableWidgetItem(worker.get('name', ''))
+            item = QTableWidgetItem(name)
             item.setTextAlignment(Qt.AlignLeft | Qt.AlignVCenter)  # type: ignore
             self.worker_table.setItem(row, 1, item)
             
             # Status
-            status = worker.get('status', 'unknown')
             item = QTableWidgetItem(status)
             if status == 'present':
                 item.setForeground(QColor('green'))
@@ -169,6 +496,34 @@ class WorkerStatusWidget(QWidget):
             item.setTextAlignment(Qt.AlignCenter)  # type: ignore
             self.worker_table.setItem(row, 3, item)
             
+            # Total Absent Time - real-time formatting (total_absent_time is seconds)
+            total_absent_secs = int(worker.get('total_absent_time', 0))
+            if total_absent_secs > 0:
+                hours = total_absent_secs // 3600
+                minutes = (total_absent_secs % 3600) // 60
+                seconds = total_absent_secs % 60
+                absent_str = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            else:
+                absent_str = "00:00:00"
+            item = QTableWidgetItem(absent_str)
+            item.setTextAlignment(Qt.AlignCenter)  # type: ignore
+
+            # Highlight absent workers with special formatting
+            if status == 'absent':
+                item.setForeground(QColor('red'))
+                item.setBackground(QColor('#ffebee'))  # Light red background
+                # Track absent workers for potential additional UI elements
+                absent_workers.append({
+                    'worker_id': worker_id,
+                    'name': name,
+                    'absent_time': total_absent_secs
+                })
+            elif total_absent_secs >= 4 * 3600:  # More than 4 hours total
+                item.setForeground(QColor('red'))
+                item.setBackground(QColor('#fff3e0'))  # Light orange background
+
+            self.worker_table.setItem(row, 4, item)
+            
             # Last Seen
             last_seen = worker.get('last_seen', 0)
             if last_seen > 0:
@@ -178,10 +533,55 @@ class WorkerStatusWidget(QWidget):
                 time_str = "Never"
             item = QTableWidgetItem(time_str)
             item.setTextAlignment(Qt.AlignCenter)  # type: ignore
-            self.worker_table.setItem(row, 4, item)
+            self.worker_table.setItem(row, 5, item)
+            
+            # Store worker_id in the first column item for later retrieval
+            self.worker_table.item(row, 0).setData(Qt.UserRole, worker_id)
+            self.worker_table.item(row, 1).setData(Qt.UserRole, name)
         
         # Resize columns to fit content
         self.worker_table.resizeColumnsToContents()
+        
+        # Log absent workers for monitoring
+        if absent_workers:
+            logger.info(f"Currently absent workers: {len(absent_workers)} - {[w['name'] for w in absent_workers]}")
+    
+    def update_selection_label(self):
+        """Update the selection label and enable/disable delete button."""
+        selected_rows = self.worker_table.selectionModel().selectedRows()
+        count = len(selected_rows)
+        
+        if count == 0:
+            self.selection_label.setText("📋 Selected: 0 workers")
+            self.delete_selected_button.setEnabled(False)
+        elif count == 1:
+            self.selection_label.setText("📋 Selected: 1 worker")
+            self.delete_selected_button.setEnabled(True)
+        else:
+            self.selection_label.setText(f"📋 Selected: {count} workers")
+            self.delete_selected_button.setEnabled(True)
+    
+    def delete_selected_workers(self):
+        """Emit signal to delete selected workers."""
+        selected_rows = self.worker_table.selectionModel().selectedRows()
+        
+        if not selected_rows:
+            return
+        
+        # Collect worker info from selected rows
+        workers_to_delete = []
+        for index in selected_rows:
+            row = index.row()
+            worker_id_item = self.worker_table.item(row, 0)
+            worker_name_item = self.worker_table.item(row, 1)
+            
+            if worker_id_item and worker_name_item:
+                worker_id = worker_id_item.data(Qt.UserRole)
+                worker_name = worker_name_item.data(Qt.UserRole)
+                workers_to_delete.append((worker_id, worker_name))
+        
+        if workers_to_delete:
+            self.delete_workers_signal.emit(workers_to_delete)
 
 
 class AlertWidget(QWidget):
@@ -192,32 +592,174 @@ class AlertWidget(QWidget):
         self.init_ui()
         
     def init_ui(self):
-        """Initialize the alert widget UI."""
+        """Initialize the alert widget UI with modern design."""
         layout = QVBoxLayout()
+        layout.setSpacing(15)
+        layout.setContentsMargins(15, 15, 15, 15)
         
-        # Title
-        title = QLabel("Alerts & Notifications")
+        # Title with icon
+        title = QLabel("🔔 Alerts & Notifications")
         font = QFont()
-        font.setPointSize(12)
+        font.setPointSize(16)
         font.setBold(True)
         title.setFont(font)
         title.setAlignment(Qt.AlignCenter)  # type: ignore
+        title.setStyleSheet("""
+            QLabel {
+                color: #1976D2;
+                padding: 10px;
+                background-color: #E3F2FD;
+                border-radius: 8px;
+            }
+        """)
         
-        # Alert list
+        # Alert count label
+        self.alert_count_label = QLabel("📊 Total Alerts: 0")
+        self.alert_count_label.setStyleSheet("""
+            QLabel {
+                font-size: 13px;
+                color: #666;
+                padding: 5px;
+                background-color: #f5f5f5;
+                border-radius: 5px;
+            }
+        """)
+        
+        # Alert list with modern styling
         self.alert_list = QListWidget()
+        self.alert_list.setStyleSheet("""
+            QListWidget {
+                background-color: white;
+                border: 2px solid #e0e0e0;
+                border-radius: 8px;
+                padding: 5px;
+                font-size: 13px;
+            }
+            QListWidget::item {
+                padding: 10px;
+                border-bottom: 1px solid #f0f0f0;
+                border-radius: 5px;
+                margin: 2px;
+            }
+            QListWidget::item:selected {
+                background-color: #BBDEFB;
+                color: black;
+            }
+            QListWidget::item:hover {
+                background-color: #E3F2FD;
+            }
+        """)
         
-        # Control buttons
+        # Control buttons with modern styling
         button_layout = QHBoxLayout()
-        self.clear_button = QPushButton("Clear Alerts")
-        self.acknowledge_button = QPushButton("Acknowledge Selected")
+        button_layout.setSpacing(10)
+        
+        self.clear_button = QPushButton("🗑️ Clear All Alerts")
+        self.clear_button.setStyleSheet("""
+            QPushButton {
+                background-color: #f44336;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 20px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #d32f2f;
+            }
+            QPushButton:pressed {
+                background-color: #c62828;
+            }
+        """)
+        self.clear_button.clicked.connect(self.clear_alerts)
+        
+        self.acknowledge_button = QPushButton("✅ Acknowledge Selected")
+        self.acknowledge_button.setStyleSheet("""
+            QPushButton {
+                background-color: #4CAF50;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 20px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #388E3C;
+            }
+            QPushButton:pressed {
+                background-color: #2E7D32;
+            }
+        """)
+        self.acknowledge_button.clicked.connect(self.acknowledge_alert)
+        
         button_layout.addWidget(self.clear_button)
         button_layout.addWidget(self.acknowledge_button)
         button_layout.addStretch()
         
         layout.addWidget(title)
+        layout.addWidget(self.alert_count_label)
         layout.addWidget(self.alert_list)
         layout.addLayout(button_layout)
         self.setLayout(layout)
+        
+        # Set widget background
+        self.setStyleSheet("""
+            QWidget {
+                background-color: #fafafa;
+            }
+        """)
+
+    def add_alert_item(self, title: str, message: str, alert_type: str) -> None:
+        """Append an alert message to the list with modern styling."""
+        try:
+            # Add timestamp
+            timestamp = datetime.now().strftime("%H:%M:%S")
+            
+            # Choose icon and color based on type
+            if alert_type == "alert":
+                icon = "🚨"
+                color = QColor('#c62828')
+                bg_color = QColor('#ffebee')
+            elif alert_type == "warning":
+                icon = "⚠️"
+                color = QColor('#ef6c00')
+                bg_color = QColor('#fff3e0')
+            else:
+                icon = "ℹ️"
+                color = QColor('#1976D2')
+                bg_color = QColor('#E3F2FD')
+            
+            text = f"{icon} [{timestamp}] {title} - {message}"
+            item = QListWidgetItem(text)
+            item.setForeground(color)  # type: ignore
+            item.setBackground(bg_color)  # type: ignore
+            
+            # Prepend newest on top
+            self.alert_list.insertItem(0, item)
+            
+            # Update alert count
+            count = self.alert_list.count()
+            self.alert_count_label.setText(f"📊 Total Alerts: {count}")
+            
+        except Exception:
+            # Non-fatal UI update failure should not crash the app
+            pass
+    
+    def clear_alerts(self):
+        """Clear all alerts from the list."""
+        self.alert_list.clear()
+        self.alert_count_label.setText("📊 Total Alerts: 0")
+    
+    def acknowledge_alert(self):
+        """Remove selected alert."""
+        current_item = self.alert_list.currentItem()
+        if current_item:
+            row = self.alert_list.row(current_item)
+            self.alert_list.takeItem(row)
+            count = self.alert_list.count()
+            self.alert_count_label.setText(f"📊 Total Alerts: {count}")
 
 
 class SettingsDialog(QDialog):
@@ -334,6 +876,8 @@ class UIManager(QMainWindow):
     stop_camera_signal = pyqtSignal()
     settings_changed_signal = pyqtSignal(dict)
     register_worker_signal = pyqtSignal()  # Signal for worker registration
+    # Signal to safely append alerts from any thread
+    append_alert_signal = pyqtSignal(str, str, str)
     
     def __init__(self, config: Optional[dict] = None):
         super().__init__()
@@ -342,9 +886,38 @@ class UIManager(QMainWindow):
         self.init_ui()
         
     def init_ui(self):
-        """Initialize the main UI."""
-        self.setWindowTitle("Floor Monitoring System")
-        self.setGeometry(100, 100, 1200, 800)
+        """Initialize the main UI with modern design."""
+        self.setWindowTitle("🏢 Floor Monitoring System - Real-time Worker Tracking")
+        self.setGeometry(100, 100, 1400, 900)
+        
+        # Set modern color scheme
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #f5f5f5;
+            }
+            QTabWidget::pane {
+                border: 2px solid #e0e0e0;
+                border-radius: 8px;
+                background-color: white;
+            }
+            QTabBar::tab {
+                background-color: #e0e0e0;
+                color: #333;
+                padding: 12px 24px;
+                margin-right: 4px;
+                border-top-left-radius: 8px;
+                border-top-right-radius: 8px;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QTabBar::tab:selected {
+                background-color: #2196F3;
+                color: white;
+            }
+            QTabBar::tab:hover:!selected {
+                background-color: #BBDEFB;
+            }
+        """)
         
         # Create central widget and main layout
         central_widget = QWidget()
@@ -372,6 +945,12 @@ class UIManager(QMainWindow):
         self.alert_widget = AlertWidget()
         alert_layout.addWidget(self.alert_widget)
         self.tab_widget.addTab(self.alert_tab, "Alerts")
+
+        # Connect cross-thread alert signal to UI slot
+        try:
+            self.append_alert_signal.connect(self.alert_widget.add_alert_item)
+        except Exception:
+            pass
         
         # Reports tab
         self.reports_tab = QWidget()
@@ -386,10 +965,20 @@ class UIManager(QMainWindow):
         # Create toolbar
         self.create_toolbar()
         
-        # Create status bar
+        # Create status bar with modern styling
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
-        self.status_bar.showMessage("Ready")
+        self.status_bar.setStyleSheet("""
+            QStatusBar {
+                background-color: #E3F2FD;
+                color: #1976D2;
+                font-size: 13px;
+                font-weight: bold;
+                padding: 5px;
+                border-top: 2px solid #2196F3;
+            }
+        """)
+        self.status_bar.showMessage("🟢 Ready - System initialized successfully")
         
         # Set up timer for UI updates
         self.update_timer = QTimer()
@@ -397,28 +986,62 @@ class UIManager(QMainWindow):
         self.update_timer.start(1000)  # Update every second
     
     def create_toolbar(self):
-        """Create the application toolbar."""
+        """Create the application toolbar with modern styling."""
         toolbar = self.addToolBar("Main")
         if toolbar is not None:
             toolbar.setMovable(False)
+            toolbar.setIconSize(QSize(32, 32))
+            toolbar.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+            toolbar.setStyleSheet("""
+                QToolBar {
+                    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                        stop:0 #2196F3, stop:1 #1976D2);
+                    spacing: 10px;
+                    padding: 8px;
+                    border-bottom: 3px solid #1565C0;
+                }
+                QToolButton {
+                    background-color: rgba(255, 255, 255, 0.1);
+                    color: white;
+                    border: 2px solid rgba(255, 255, 255, 0.3);
+                    border-radius: 6px;
+                    padding: 8px 16px;
+                    font-size: 13px;
+                    font-weight: bold;
+                    margin: 2px;
+                }
+                QToolButton:hover {
+                    background-color: rgba(255, 255, 255, 0.2);
+                    border: 2px solid rgba(255, 255, 255, 0.5);
+                }
+                QToolButton:pressed {
+                    background-color: rgba(255, 255, 255, 0.3);
+                }
+                QToolButton:disabled {
+                    background-color: rgba(255, 255, 255, 0.05);
+                    color: rgba(255, 255, 255, 0.4);
+                    border: 2px solid rgba(255, 255, 255, 0.1);
+                }
+            """)
             
             # Start action
-            self.start_action = QAction(QIcon(), "Start", self)
+            self.start_action = QAction(QIcon(), "▶️ Start Monitoring", self)
             self.start_action.setStatusTip("Start camera monitoring")
             self.start_action.triggered.connect(self.start_monitoring)
             toolbar.addAction(self.start_action)
             
             # Stop action
-            self.stop_action = QAction(QIcon(), "Stop", self)
+            self.stop_action = QAction(QIcon(), "⏹️ Stop Monitoring", self)
             self.stop_action.setStatusTip("Stop camera monitoring")
             self.stop_action.triggered.connect(self.stop_monitoring)
+            self.stop_action.setEnabled(False)  # Initially disabled
             toolbar.addAction(self.stop_action)
             
             # Add separator
             toolbar.addSeparator()
             
             # Register Worker action
-            self.register_action = QAction(QIcon(), "Register Worker", self)
+            self.register_action = QAction(QIcon(), "👤 Register Worker", self)
             self.register_action.setStatusTip("Register a new worker")
             self.register_action.triggered.connect(self.register_worker)
             toolbar.addAction(self.register_action)
@@ -427,7 +1050,7 @@ class UIManager(QMainWindow):
             toolbar.addSeparator()
             
             # Settings action
-            self.settings_action = QAction(QIcon(), "Settings", self)
+            self.settings_action = QAction(QIcon(), "⚙️ Settings", self)
             self.settings_action.setStatusTip("Open settings dialog")
             self.settings_action.triggered.connect(self.open_settings)
             toolbar.addAction(self.settings_action)
@@ -436,7 +1059,7 @@ class UIManager(QMainWindow):
             toolbar.addSeparator()
             
             # Exit action
-            self.exit_action = QAction(QIcon(), "Exit", self)
+            self.exit_action = QAction(QIcon(), "🚪 Exit", self)
             self.exit_action.setStatusTip("Exit application")
             self.exit_action.triggered.connect(self.close)  # type: ignore
             toolbar.addAction(self.exit_action)
@@ -446,12 +1069,20 @@ class UIManager(QMainWindow):
         self.start_camera_signal.emit()
         self.status_bar.showMessage("Monitoring started")
         logger.info("UI: Start monitoring requested")
+        
+        # Update button states
+        self.start_action.setEnabled(False)
+        self.stop_action.setEnabled(True)
     
     def stop_monitoring(self):
         """Stop camera monitoring."""
         self.stop_camera_signal.emit()
         self.status_bar.showMessage("Monitoring stopped")
         logger.info("UI: Stop monitoring requested")
+        
+        # Update button states
+        self.start_action.setEnabled(True)
+        self.stop_action.setEnabled(False)
     
     def register_worker(self):
         """Open worker registration dialog."""
@@ -488,12 +1119,39 @@ class UIManager(QMainWindow):
     def update_worker_status(self, workers: List[Dict]):
         """Update the worker status display."""
         self.worker_status_widget.update_workers(workers)
+        
+        # Update status bar with absent worker information
+        absent_count = sum(1 for worker in workers if worker.get('status') == 'absent')
+        if absent_count > 0:
+            absent_names = [w.get('name', '') for w in workers if w.get('status') == 'absent']
+            self.status_bar.showMessage(f"⚠️ {absent_count} worker(s) absent: {', '.join(absent_names[:3])}{'...' if len(absent_names) > 3 else ''}")
+        else:
+            self.status_bar.showMessage("All workers present")
     
     def update_ui(self):
         """Update UI elements periodically."""
         # This method is called every second by the timer
         # It can be used to update time displays, check for alerts, etc.
         pass
+
+    def add_alert(self, title: str, message: str, alert_type: str = "info") -> None:
+        """Surface an alert in the Alerts tab (thread-safe)."""
+        try:
+            self.append_alert_signal.emit(title, message, alert_type)
+        except Exception:
+            # Best-effort fallback if emit fails
+            if hasattr(self, 'alert_widget') and self.alert_widget:
+                try:
+                    self.alert_widget.add_alert_item(title, message, alert_type)
+                except Exception:
+                    pass
+    
+    def showEvent(self, event):  # type: ignore
+        """Handle window show event - refresh worker status when window is first shown."""
+        super().showEvent(event)
+        # The parent application will handle refreshing worker status
+        # This is just a hook in case needed
+        logger.debug("UI window shown")
     
     def closeEvent(self, a0):  # type: ignore
         """Handle application close event."""

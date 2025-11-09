@@ -3,24 +3,31 @@
         "host": "localhost",
         "name": "floor_monitor",
         "user": "postgres",
-        "password": "your_password_here",
         "port": 5432
     },
     "cameras": [
         {
             "id": 0,
             "name": "Camera 0",
-            "width": 1280,
-            "height": 720,
-            "fps": 60,
+            "width": 640,
+            "height": 480,
+            "fps": 30,
             "rois": []
         },
         {
             "id": 1,
             "name": "Camera 1",
-            "width": 1280,
-            "height": 720,
-            "fps": 60,
+            "width": 640,
+            "height": 480,
+            "fps": 30,
+            "rois": []
+        },
+        {
+            "id": 2,
+            "name": "Camera 2",
+            "width": 1024,
+            "height": 768,
+            "fps": 30,
             "rois": []
         }
     ],

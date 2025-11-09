@@ -7,6 +7,14 @@ import os
 import logging
 from pathlib import Path
 
+# Suppress TensorFlow warnings and info messages
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Suppress TF logging (0=all, 1=info, 2=warning, 3=error)
+os.environ['TF_ENABLE_ONEDNN_OPTS'] = '0'  # Disable oneDNN custom operations messages
+
+# Suppress protobuf warnings
+import warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='google.protobuf')
+
 # Add src directory to path
 src_path = Path(__file__).parent / "src"
 sys.path.insert(0, str(src_path))

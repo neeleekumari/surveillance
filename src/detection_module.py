@@ -137,35 +137,64 @@ class PersonDetector:
             
         frame_copy = frame.copy()
         
+        # Show labels with color-coded backgrounds based on recognition status
         for det in detections:
             x1, y1, x2, y2 = map(int, det.bbox)
             
-            # Draw bounding box
-            color = (0, 255, 0)  # Green for person
-            thickness = 2
-            cv2.rectangle(frame_copy, (x1, y1), (x2, y2), color, thickness)
-            
-            # Create label
-            if det.worker_name:
-                # Show recognized worker name
-                label = f"{det.worker_name}"
+            # Determine status and set colors accordingly
+            if det.worker_name and det.worker_name != "Unknown":
+                # RECOGNIZED WORKER - Green background
+                label = f"✓ {det.worker_name}"
                 if show_conf and det.recognition_score:
-                    label += f" ({det.recognition_score:.2f})"
-                color = (0, 255, 255)  # Yellow for recognized workers
+                    label += f" ({det.recognition_score:.0%})"
+                bg_color = (0, 150, 0)  # Green - Recognized and identified
+                text_color = (255, 255, 255)  # White text
+                font_scale = 0.7
+                font_thickness = 2
+                
+            elif det.worker_name == "Unknown" and det.tracker_id is not None:
+                # TRACKED BUT UNKNOWN - Orange background
+                label = f"⚠ Unknown Person"
+                if det.tracker_id:
+                    label += f" [Track {det.tracker_id}]"
+                bg_color = (0, 140, 255)  # Orange - Being tracked but not recognized
+                text_color = (255, 255, 255)  # White text
+                font_scale = 0.6
+                font_thickness = 2
+                
+            elif det.tracker_id is not None:
+                # BEING TRACKED - Yellow background
+                label = f"👤 Tracking..."
+                if det.tracker_id:
+                    label += f" [T{det.tracker_id}]"
+                bg_color = (0, 200, 255)  # Yellow - Detection in progress
+                text_color = (0, 0, 0)  # Black text for better contrast
+                font_scale = 0.6
+                font_thickness = 2
+                
             else:
-                label = f"Person: {det.confidence:.2f}" if show_conf else "Person"
-                if det.tracker_id is not None:
-                    label = f"ID: {det.tracker_id} {label}"
+                # NEW DETECTION - Blue background
+                label = "🔍 Detecting..."
+                bg_color = (200, 100, 0)  # Blue - New detection, not yet tracked
+                text_color = (255, 255, 255)  # White text
+                font_scale = 0.6
+                font_thickness = 1
             
-            # Draw label background
+            # Calculate label size
             (label_w, label_h), _ = cv2.getTextSize(
-                label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 1
+                label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness
             )
+            
+            # Position label at top of detection
+            label_x = x1
+            label_y = max(30, y1 - 10)  # Keep label visible
+            
+            # Draw background rectangle with status color
             cv2.rectangle(
                 frame_copy, 
-                (x1, y1 - 20), 
-                (x1 + label_w, y1), 
-                color, 
+                (label_x, label_y - label_h - 8), 
+                (label_x + label_w + 10, label_y + 2), 
+                bg_color,
                 -1
             )
             
@@ -173,11 +202,11 @@ class PersonDetector:
             cv2.putText(
                 frame_copy,
                 label,
-                (x1, y1 - 5),
+                (label_x + 5, label_y - 5),
                 cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 0, 0),  # Black text
-                1,
+                font_scale,
+                text_color,
+                font_thickness,
                 cv2.LINE_AA
             )
         

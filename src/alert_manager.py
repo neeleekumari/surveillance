@@ -51,6 +51,10 @@ class AlertManager:
         self.alert_history: List[Alert] = []
         self.max_history = 1000
         self.running = True
+        # Sound throttling and caching
+        self.last_sound_time: Dict[str, float] = {}
+        self.invalid_sound_paths: set = set()
+        self.sound_min_interval: float = self.config.get("notifications", {}).get("sound_min_interval_seconds", 2.0)
         
         # Initialize toast notifier if available
         self.toaster = ToastNotifier() if TOAST_AVAILABLE and ToastNotifier is not None else None
@@ -121,29 +125,80 @@ class AlertManager:
     
     def _play_alert_sound(self, alert_type: str) -> None:
         """Play an alert sound based on the alert type."""
-        if not PLAYSOUND_AVAILABLE or not playsound:
+        # Throttle sounds per type
+        now = time.time()
+        last = self.last_sound_time.get(alert_type, 0.0)
+        if now - last < self.sound_min_interval:
+            logger.debug(f"Skipping sound for '{alert_type}' (throttled)")
             return
-            
+        self.last_sound_time[alert_type] = now
+
+        # Define sound path based on type
+        sound_path = None
+        if alert_type == "alert":
+            sound_path = "assets/sounds/alert.wav"
+        elif alert_type == "warning":
+            sound_path = "assets/sounds/warning.wav"
+        elif alert_type == "info":
+            sound_path = "assets/sounds/info.wav"
+
+        # If no path configured, attempt a default beep
+        if not sound_path:
+            self._beep_fallback()
+            logger.debug(f"No specific sound for {alert_type}, used fallback beep")
+            return
+
+        # If path does not exist, skip with debug to avoid noise
+        if not os.path.exists(sound_path):
+            logger.debug(f"Sound file not found: {sound_path} - skipping sound")
+            return
+
+        # If previously marked invalid, avoid repeating warnings
+        if sound_path in self.invalid_sound_paths:
+            self._beep_fallback()
+            logger.debug(f"Skipping known-invalid sound '{sound_path}', used fallback beep")
+            return
+
+        # Prefer winsound on Windows for WAV playback
+        def _play_win(path: str) -> None:
+            try:
+                import winsound  # type: ignore
+                winsound.PlaySound(path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+            except Exception as err:
+                self.invalid_sound_paths.add(path)
+                logger.warning(f"Failed to play sound '{path}' with winsound: {err}. Using fallback beep.")
+                self._beep_fallback()
+
+        # playsound fallback for non-Windows
+        def _play_ps(path: str) -> None:
+            try:
+                if PLAYSOUND_AVAILABLE and playsound:
+                    playsound(path)
+                else:
+                    raise RuntimeError("playsound not available")
+            except Exception as err:
+                self.invalid_sound_paths.add(path)
+                logger.warning(f"Failed to play sound '{path}' with playsound: {err}. Using fallback beep.")
+                self._beep_fallback()
+
+        # Dispatch in background thread to avoid blocking
         try:
-            # Define sound paths based on alert type
-            sound_path = None
-            if alert_type == "alert":
-                sound_path = "assets/sounds/alert.wav"
-            elif alert_type == "warning":
-                sound_path = "assets/sounds/warning.wav"
-            elif alert_type == "info":
-                sound_path = "assets/sounds/info.wav"
-            
-            # Play sound if path exists
-            if sound_path and os.path.exists(sound_path):
-                playsound(sound_path)
-            elif sound_path:
-                logger.warning(f"Sound file not found: {sound_path}")
+            if os.name == 'nt':
+                threading.Thread(target=_play_win, args=(sound_path,), daemon=True).start()
             else:
-                # Default sound if no specific sound is defined
-                logger.info(f"No specific sound for {alert_type}, playing default")
+                threading.Thread(target=_play_ps, args=(sound_path,), daemon=True).start()
         except Exception as e:
-            logger.error(f"Failed to play sound: {str(e)}")
+            logger.debug(f"Failed to start sound thread: {e}")
+            self._beep_fallback()
+
+    def _beep_fallback(self) -> None:
+        """Best-effort non-blocking beep on Windows; otherwise no-op."""
+        try:
+            if os.name == 'nt':
+                import winsound  # type: ignore
+                winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        except Exception:
+            pass
     
     def acknowledge_alert(self, alert_id: str) -> bool:
         """Acknowledge an alert by ID."""

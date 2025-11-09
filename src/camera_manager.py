@@ -135,6 +135,9 @@ class CameraManager:
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, config.get('height', 720))
             cap.set(cv2.CAP_PROP_FPS, config.get('fps', 30))
             
+            # Optimize camera buffer for low latency
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)  # Minimal buffer size for lowest latency
+            
             # Create camera config
             camera_config = CameraConfig(
                 camera_id=camera_id,
@@ -147,7 +150,7 @@ class CameraManager:
             
             self.cameras[camera_id] = camera_config
             self.captures[camera_id] = cap
-            self.frame_queues[camera_id] = Queue(maxsize=2)  # Keep only latest frame
+            self.frame_queues[camera_id] = Queue(maxsize=1)  # Keep only latest frame for minimal latency
             
             logger.info(f"Added camera {camera_id}: {camera_config}")
             return True
@@ -180,8 +183,11 @@ class CameraManager:
                 cap.set(cv2.CAP_PROP_FRAME_HEIGHT, camera_config.height)
                 cap.set(cv2.CAP_PROP_FPS, camera_config.fps)
                 
+                # Optimize camera buffer for low latency
+                cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                
                 self.captures[camera_id] = cap
-                self.frame_queues[camera_id] = Queue(maxsize=2)
+                self.frame_queues[camera_id] = Queue(maxsize=1)  # Minimal queue for low latency
                 logger.info(f"Successfully re-opened camera {camera_id}")
             
         self.running = True
@@ -239,25 +245,34 @@ class CameraManager:
                 x, y, w, h = roi
                 frame = frame[y:y+h, x:x+w]
             
-            # Add frame to queue, discarding old frames if queue is full
+            # Add frame to queue, discarding old frames if queue is full (keep only latest)
             if frame_queue.full():
                 try:
-                    frame_queue.get_nowait()
+                    frame_queue.get_nowait()  # Discard old frame
                 except:
                     pass
-            frame_queue.put(frame.copy())
             
-            # Small delay to prevent excessive CPU usage
-            time.sleep(0.001)
+            try:
+                frame_queue.put_nowait(frame.copy())  # Non-blocking put
+            except:
+                pass  # Queue full, skip this frame
+            
+            # Minimal delay to prevent excessive CPU usage
+            time.sleep(0.0001)  # Reduced from 0.001 to 0.0001
     
-    def get_frame(self, camera_id: int, timeout: float = 1.0) -> Optional[np.ndarray]:
-        """Get the latest frame from a camera."""
+    def get_frame(self, camera_id: int, timeout: float = 0.1) -> Optional[np.ndarray]:
+        """Get the latest frame from a camera with minimal latency."""
         if camera_id not in self.frame_queues:
             logger.error(f"No such camera: {camera_id}")
             return None
             
         try:
-            return self.frame_queues[camera_id].get(timeout=timeout)
+            # Try non-blocking first for lowest latency
+            try:
+                return self.frame_queues[camera_id].get_nowait()
+            except:
+                # Fall back to timeout if queue is empty
+                return self.frame_queues[camera_id].get(timeout=timeout)
         except:
             return None
     

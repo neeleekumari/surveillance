@@ -120,33 +120,105 @@ venv.bak/
 
 # mypy
 .mypy_cache/
-.dmypy.json
 dmypy.json
 
 # Pyre type checker
 .pyre/
 
-# Application data
+# ============================================
+# Application-Specific Files
+# ============================================
+
+# Log files
 *.log
 app.log
+floor_monitor.log
+
+# Generated reports
 reports/
 *.pdf
 *.csv
 
-# IDE
+# Temporary files
+temp_*.jpg
+temp_*.png
+temp_*.jpeg
+
+# Database backups
+*.sql.backup
+*.dump
+
+# Face embeddings cache (if any)
+embeddings_cache/
+*.pkl
+
+# ============================================
+# IDE & Editors
+# ============================================
 .vscode/
 .idea/
 *.swp
 *.swo
+*~
+.project
+.pydevproject
+.settings/
 
-# OS
+# ============================================
+# OS-Specific
+# ============================================
 .DS_Store
 Thumbs.db
+desktop.ini
+*.lnk
 
-# YOLO models
-*.pt
-*.pth
+# ============================================
+# AI Models
+# ============================================
 
-# Build artifacts
+# YOLO models (keep yolov8n.pt in repo, ignore others)
+# *.pt
+# *.pth
+yolov8*.pt
+!yolov8n.pt
+
+# DeepFace models (auto-downloaded)
+.deepface/
+
+# TensorFlow models
+*.h5
+*.pb
+saved_models/
+
+# ============================================
+# Build & Distribution
+# ============================================
 *.exe
 *.msi
+*.app
+*.dmg
+*.deb
+*.rpm
+
+# PyInstaller
+*.spec
+build/
+dist/
+
+# ============================================
+# Data & Assets (Project-Specific)
+# ============================================
+
+# Worker photos (keep structure, ignore content)
+data/workers/*/
+!data/workers/.gitkeep
+
+# Training data
+training/dataset/
+training/models/
+training/*.pt
+training/*.pth
+
+# Test images
+test_images/
+screenshots/

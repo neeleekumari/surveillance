@@ -1,9 +1,28 @@
-# Development dependencies
-pytest>=7.2.0
-pytest-cov>=4.0.0
-black>=22.12.0
-flake8>=6.0.0
-isort>=5.12.0
-mypy>=1.0.0
-pyinstaller>=5.13.0
-sphinx>=6.0.0
+# ============================================
+# Development Dependencies
+# Floor Monitoring Surveillance System
+# ============================================
+
+# ============================================
+# Testing
+# ============================================
+pytest>=7.2.0                     # Testing framework
+pytest-cov>=4.0.0                 # Code coverage reporting
+
+# ============================================
+# Code Quality & Formatting
+# ============================================
+black>=22.12.0                    # Code formatter
+flake8>=6.0.0                     # Linting and style checking
+isort>=5.12.0                     # Import sorting
+mypy>=1.0.0                       # Static type checking
+
+# ============================================
+# Build & Deployment
+# ============================================
+pyinstaller>=5.13.0               # Package to executable
+
+# ============================================
+# Documentation
+# ============================================
+sphinx>=6.0.0                     # Documentation generator

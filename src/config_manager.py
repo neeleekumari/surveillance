@@ -2,23 +2,32 @@
 Configuration Manager Module
 --------------------------
 Handles loading, validating, and managing application configuration.
+Loads sensitive data (passwords, API keys) from environment variables.
 """
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Dict, Any, Optional
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 logger = logging.getLogger(__name__)
 
 class ConfigManager:
     """Manages application configuration loading and validation."""
     
-    def __init__(self, config_path: str = "config/config.json"):
+    def __init__(self, config_path: str = None):
         """Initialize the configuration manager.
         
         Args:
             config_path: Path to the configuration file
         """
+        if config_path is None:
+            # Default to config file in project root
+            config_path = str(Path(__file__).parent.parent / "config" / "config.json")
         self.config_path = Path(config_path)
         self.config = {}
         self.default_config = {
@@ -191,12 +200,25 @@ class ConfigManager:
         logger.info("Configuration reset to defaults")
     
     def get_database_config(self) -> Dict[str, Any]:
-        """Get database configuration.
+        """Get database configuration with password from environment variable.
         
         Returns:
-            Database configuration dictionary
+            Database configuration dictionary with password from .env
         """
-        return self.config.get("database", self.default_config["database"])
+        db_config = self.config.get("database", self.default_config["database"]).copy()
+        
+        # Override with environment variables (passwords should come from .env, not config.json)
+        db_config['host'] = os.getenv('DB_HOST', db_config.get('host', 'localhost'))
+        db_config['name'] = os.getenv('DB_NAME', db_config.get('name', 'floor_monitor'))
+        db_config['user'] = os.getenv('DB_USER', db_config.get('user', 'postgres'))
+        db_config['password'] = os.getenv('DB_PASSWORD', db_config.get('password', ''))
+        db_config['port'] = int(os.getenv('DB_PORT', str(db_config.get('port', 5432))))
+        
+        # Log warning if password is not set
+        if not db_config['password']:
+            logger.warning("Database password not set in environment variables (.env file)")
+        
+        return db_config
     
     def get_camera_configs(self) -> list:
         """Get camera configurations.
